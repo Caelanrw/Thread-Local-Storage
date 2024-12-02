@@ -174,3 +174,70 @@ void handle_pf(int sig, siginfo_t *si, void *context){
 
         return;
 }
+
+
+
+
+int tls_read(unsigned int offset, unsigned int length, char *buffer){
+        //ERROR CHECKING
+        pthread_t threadid = pthread_self();
+        int hash = threadid % HASH_SIZE;
+        struct hash_element *current = hash_table[hash];
+
+        if(current == NULL){
+                return -1;
+        }
+
+        int hasTLS = 0;
+        while(current != NULL){
+                if(threadid == current->tid){
+                        hasTLS = 1;
+                        break;
+                }
+
+                current = current->next;
+        }
+
+        if(!hasTLS)
+        {
+                return -1;
+        }
+
+
+        if(offset+length > current->tls->page_num * PAGE_SIZE){
+                return -1;
+        }
+
+
+        //UNPROTECT PAGES
+        int i;
+        for(i=0; i<current->tls->page_num; i++){
+                tls_unprotect(current->tls->pages[i]);
+        }
+
+
+        //PERFORM READ OPERATION
+        int cnt, idx;
+        char* src;
+        for(cnt = 0, idx = offset; idx < (offset + length); ++cnt, ++idx){
+                struct page *p;
+                unsigned int pn, poff;
+
+                pn = idx / PAGE_SIZE;
+                poff = idx % PAGE_SIZE;
+
+                p = current->tls->pages[pn];
+                src = ((char*) p->address) + poff;
+
+                buffer[cnt] = *src;
+        }
+
+
+        //REPROTECT PAGES
+        for(i=0; i<current->tls->page_num; i++){
+                tls_protect(current->tls->pages[i]);
+        }
+
+
+        return 0;
+}
