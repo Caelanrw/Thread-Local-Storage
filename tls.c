@@ -105,3 +105,72 @@ int tls_create(unsigned int size){
 
         return 0;
 }
+
+
+void tls_init(){
+        PAGE_SIZE = getpagesize();
+
+        //set up the signal handler
+
+        struct sigaction sa;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_SIGINFO;       /*tells sigaction to use sa_sigaction instead of handler*/
+        sa.sa_sigaction = handle_pf;
+
+        sigaction(SIGBUS, &sa, NULL);
+        sigaction(SIGSEGV, &sa, NULL);
+
+        initialized = 1;
+        return;
+}
+
+
+void tls_protect(struct page *p){
+        if(mprotect((void*)p->address, PAGE_SIZE, PROT_NONE)){
+                fprintf(stderr, "tls_protect: could not protect page\n");
+                exit(1);
+        }
+}
+
+
+
+void tls_unprotect(struct page *p){
+        if(mprotect((void*)p->address, PAGE_SIZE, PROT_READ | PROT_WRITE)){
+                fprintf(stderr, "tls_unprotect: could not unprotect page\n");
+                exit(1);
+        }
+}
+
+
+
+
+void handle_pf(int sig, siginfo_t *si, void *context){
+        unsigned long int p_fault = ((unsigned long int)si->si_addr) & ~(PAGE_SIZE - 1);
+
+        int i;
+        struct hash_element *current;
+        for(i=0; i<HASH_SIZE; i++){
+                current = hash_table[i];
+                while(current->next != NULL){
+                        int pageIndex;
+                        for(pageIndex=0; pageIndex < current->tls->page_num; pageIndex++){
+                                if(current->tls->pages[pageIndex]->address == p_fault){
+                                        pthread_exit(NULL);
+                                }
+                        }
+                        current = current->next;
+                }
+                int pageIndex;
+                for(pageIndex=0; pageIndex < current->tls->page_num; pageIndex++){
+                        if(current->tls->pages[pageIndex]->address == p_fault){
+                                pthread_exit(NULL);
+                        }
+                }
+        }
+
+        signal(SIGSEGV, SIG_DFL);
+        signal(SIGBUS, SIG_DFL);
+        raise(sig);
+
+        return;
+}
