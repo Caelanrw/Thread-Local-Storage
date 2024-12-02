@@ -241,3 +241,141 @@ int tls_read(unsigned int offset, unsigned int length, char *buffer){
 
         return 0;
 }
+
+
+
+
+int tls_write(unsigned int offset, unsigned int length, char *buffer){
+        //ERROR CHECKING
+        pthread_t threadid = pthread_self();
+        int hash = threadid % HASH_SIZE;
+        struct hash_element *current = hash_table[hash];
+
+        if(current == NULL){
+                return -1;
+        }
+
+        int hasTLS = 0;
+        while(current != NULL){
+                if(threadid == current->tid){
+                        hasTLS = 1;
+                        break;
+                }
+
+                current = current->next;
+        }
+
+        if(!hasTLS)
+        {
+                return -1;
+        }
+
+
+        if(offset+length > current->tls->page_num * PAGE_SIZE){
+                return -1;
+        }
+
+
+        //UNPROTECT PAGES
+        int i;
+        for(i = 0; i < current->tls->page_num; i++){
+                tls_unprotect(current->tls->pages[i]);
+        }
+
+
+        //PERFORM WRITE OPERATION
+        int cnt, idx;
+        char* dst;
+        for(cnt= 0, idx = offset; idx < (offset+length); ++cnt, ++idx){
+                struct page *p, *copy;
+                unsigned int pn, poff;
+                pn = idx / PAGE_SIZE;
+                poff = idx % PAGE_SIZE;
+                p = current->tls->pages[pn];
+                if(p->ref_count > 1){
+                        //CREATE PRIVATE COPY (COW)
+                        copy = (struct page*) calloc(1, sizeof(struct page));
+                        copy->address = (unsigned long int)mmap(0, PAGE_SIZE, PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
+                        copy->ref_count = 1;
+                        current->tls->pages[pn] = copy;
+
+                        p->ref_count--;
+                        tls_protect(p);
+                        p = copy;
+                }
+                dst = ((char*)p->address) + poff;
+                *dst = buffer[cnt];
+        }
+
+
+        //REPROTECT PAGES
+        for(i = 0; i < current->tls->page_num; i++){
+                tls_protect(current->tls->pages[i]);
+        }
+
+
+        return 0;
+}
+
+
+
+
+int tls_destroy(){
+        //ERROR HANDLING
+        pthread_t threadid = pthread_self();
+        int hash = threadid % HASH_SIZE;
+        struct hash_element *current = hash_table[hash];
+        struct hash_element *prev = NULL;
+
+        if(current == NULL){
+                return -1;
+        }
+
+        int hasTLS = 0;
+        while(current != NULL){
+                if(threadid == current->tid){
+                        hasTLS = 1;
+                        break;
+                }
+                prev = current;
+                current = current->next;
+        }
+
+        if(!hasTLS)
+        {
+                return -1;
+        }
+
+
+        //CLEAN UP ALL PAGES
+        int i;
+        for(i = 0; i < current->tls->page_num; i++){
+                if ( current->tls->pages[i]->ref_count <= 1){
+                        free(current->tls->pages[i]);
+                }
+
+                current->tls->pages[i]->ref_count--;
+        }
+
+
+        //CLEAN UP TLS
+        free(current->tls->pages);
+        free(current->tls);
+
+
+        //REMOVE MAPPING FROM GLOBAL DATA STRUCTURE
+        if(prev == NULL)
+        {
+                //current was at the head of tthe chain
+                hash_table[hash] = current->next;
+        }
+        else
+        {
+                //remove node from linked list
+                prev->next = current->next;
+        }
+
+        free(current);
+
+        return 0;
+}
