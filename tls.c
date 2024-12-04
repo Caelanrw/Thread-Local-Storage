@@ -379,3 +379,85 @@ int tls_destroy(){
 
         return 0;
 }
+
+
+
+
+int tls_clone(pthread_t tid){
+        //ERROR HANDLING
+        pthread_t threadID = pthread_self();
+        int hash = threadID % HASH_SIZE;
+        struct hash_element *current = hash_table[hash];
+
+        while(current != NULL){
+                if(threadID == current->tid){
+                        return -1;      //TLS ALREADY EXISTS
+                }
+
+                current = current->next;
+        }
+
+
+
+        hash = tid % HASH_SIZE;
+        current = hash_table[hash];
+
+        if(current == NULL){
+                //target thread has no tls
+                return -1;
+        }
+
+        int hasTLS = 0;
+        while(current != NULL){
+                if(tid == current->tid){
+                        hasTLS = 1;
+                        break;
+                }
+
+                current = current->next;
+        }
+
+        if(!hasTLS)
+        {
+                //target thread has no tls
+                return -1;
+        }
+
+
+        //DO CLONING, ALLOCATE TLS
+        TLS *tls = calloc(1, sizeof(TLS));
+        tls->tid = pthread_self();
+        tls->size = current->tls->size;
+        tls->page_num = current->tls->page_num;
+        tls->pages = calloc(tls->page_num, sizeof(struct page*));
+
+
+        //COPY PAGES, ADJUST REFERENCE COUNTS
+        int i;
+        for(i=0; i < tls->page_num; i++){
+                tls->pages[i] = current->tls->pages[i];
+                current->tls->pages[i]->ref_count++;
+        }
+
+
+        //ADD THREAD/TLS TO GLOBAL DATA STRUCTURE
+        struct hash_element *new_elem = malloc(sizeof(struct hash_element));
+        new_elem->next = NULL;
+        new_elem->tid = pthread_self();
+        new_elem->tls = tls;
+
+        hash = new_elem->tid % HASH_SIZE;
+        struct hash_element *last = hash_table[hash];
+
+        if(last == NULL){
+                hash_table[hash] = new_elem;
+        }
+        else{
+                while(last->next != NULL){
+                        last = last->next;
+                }
+                last->next = new_elem;
+        }
+
+        return 0;
+}
